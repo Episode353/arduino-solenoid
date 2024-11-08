@@ -170,7 +170,7 @@ void EncoderIntoNotes() {
 }
 
 // Define the flash duration (in milliseconds)
-const unsigned long flashDuration = 33;
+const unsigned long flashDuration = 30;
 
 // Array to track the last flash time for each button's LED
 unsigned long ledFlashTimers[16];
