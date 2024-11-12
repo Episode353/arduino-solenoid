@@ -36,19 +36,20 @@ int max_bpm = 1000;  // Max BPM
 int min_bpm = 30;  // Minimum BPM
 int cycleInterval;  // Interval for note cycling in milliseconds
 
-// Function toggle handler (updated to handle function 3)
+// Function toggle handler
 void toggleFunction(int buttonIndex, bool isPressed) {
-  if (buttonIndex == 12) {  // Toggle function 1
-    if (isPressed || !isPressed) {  
-      function1State = !function1State;
+  // Toggle function 1 when button 12 is pressed or released
+  if (buttonIndex == 12) {
+    if (isPressed || !isPressed) {  // Trigger on both press and release
+      function1State = !function1State;  // Toggle the state
       Serial.print("Function 1 ");
       Serial.println(function1State ? "ON" : "OFF");
     }
   }
 
-  if (buttonIndex == 13) {  // Toggle function 2 (Arpeggio)
-    if (isPressed || !isPressed) {  
-      function2State = !function2State;
+  if (buttonIndex == 13) {
+    if (isPressed || !isPressed) {  // Trigger on both press and release
+      function2State = !function2State;  // Toggle the state
       Serial.print("Function 2 ");
       Serial.println(function2State ? "ON" : "OFF");
     }
@@ -246,6 +247,7 @@ void sendMidiNote() {
         ledFlashing[ledIndex] = true;         // Mark the LED as flashing
     }
 
+
     // Send MIDI Note Off
     midiEventPacket_t noteOff = {0x08, 0x80, note, 0};
     MidiUSB.sendMIDI(noteOff);
@@ -254,6 +256,7 @@ void sendMidiNote() {
 
 
 
+// Cycle notes at the set BPM
 // Modify cycleNotes function to incorporate random note selection if function 3 is ON
 void cycleNotes() {
   cycleInterval = 60000 / bpm;

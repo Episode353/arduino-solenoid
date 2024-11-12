@@ -227,6 +227,8 @@ void sendMidiNote() {
         ledFlashing[ledIndex] = true;         // Mark the LED as flashing
     }
 
+    delay(100);
+
     // Send MIDI Note Off
     midiEventPacket_t noteOff = {0x08, 0x80, note, 0};
     MidiUSB.sendMIDI(noteOff);
