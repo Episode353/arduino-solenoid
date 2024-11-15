@@ -225,10 +225,12 @@ void loop() {
 
 void sendMidiNote() {
     int note = activeNotes[currentNoteIndex];
-    if (function1State) {
-        note += octaveShift * 12;  // Adjust note based on octave shift if Function 1 is ON
-    }
 
+    // Un-Comment this to have the octave shift only work with the function 1 knob
+    //if (function1State) {
+    //    note += octaveShift * 12;  // Adjust note based on octave shift if Function 1 is ON
+    //}
+    note += octaveShift * 12;
     // Calculate LED index for the note and check if it's within valid range
     int ledIndex = note % 12;
     if (ledIndex < 0 || ledIndex >= 12) {
