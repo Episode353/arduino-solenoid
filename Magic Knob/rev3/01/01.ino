@@ -4,13 +4,13 @@
 const unsigned long flashDuration = 30;
 
 // Array to track the last flash time for each button's LED
-unsigned long ledFlashTimers[16];
-bool ledFlashing[16] = {false}; // Track whether each LED is in flash-off state
+unsigned long ledFlashTimers[32];
+bool ledFlashing[32] = {false}; // Track whether each LED is in flash-off state
 
 #include <EEPROM.h>
 
 // Constants for preset handling
-#define PRESET1_BUTTON 15
+#define PRESET1_BUTTON 31
 #define PRESET1_ADDRESS 0 // Start address in EEPROM for preset1
 #define NOTES_COUNT 12 // Only saving buttons 1-12
 
@@ -27,10 +27,17 @@ bool presetButtonPressed = false;
 #define muxS2Pin 8
 #define muxS3Pin 9
 
-int numOfRegisters = 2;
+#define muxSigPin2 A2
+#define muxS0Pin2 19
+#define muxS1Pin2 18
+#define muxS2Pin2 15
+#define muxS3Pin2 14
+
+
+int numOfRegisters = 4;
 byte* registerState;
-bool buttonStates[16];
-bool prevButtonStates[16];
+bool buttonStates[32];
+bool prevButtonStates[32];
 
 int currentNoteIndex = 0;   // Index to keep track of current note position in the active notes list
 int octaveShift = 0;        // Variable to track the current octave shift
@@ -123,20 +130,28 @@ void setup() {
   pinMode(latchPin, OUTPUT);
   pinMode(clockPin, OUTPUT);
   pinMode(dataPin, OUTPUT);
+
   pinMode(muxS0Pin, OUTPUT);
   pinMode(muxS1Pin, OUTPUT);
   pinMode(muxS2Pin, OUTPUT);
   pinMode(muxS3Pin, OUTPUT);
+
+  pinMode(muxS0Pin2, OUTPUT);
+  pinMode(muxS1Pin2, OUTPUT);
+  pinMode(muxS2Pin2, OUTPUT);
+  pinMode(muxS3Pin2, OUTPUT);
+
   pinMode(muxSigPin, INPUT_PULLUP);
+  pinMode(muxSigPin2, INPUT_PULLUP);
   pinMode(encoderPinA, INPUT_PULLUP);
   pinMode(encoderPinB, INPUT_PULLUP);
 
   Serial.begin(9600);
   clearShiftRegister();
 
-  // Load the preset from EEPROM into RAM on startup
   loadPresetFromEEPROM(PRESET1_ADDRESS);
 }
+
 
 
 
@@ -153,6 +168,7 @@ void clearShiftRegister() {
 
 void readMuxButtons() {
   for (int i = 0; i < 16; i++) {
+    // Read from the first multiplexer
     digitalWrite(muxS0Pin, (i & 1) ? HIGH : LOW);
     digitalWrite(muxS1Pin, (i & 2) ? HIGH : LOW);
     digitalWrite(muxS2Pin, (i & 4) ? HIGH : LOW);
@@ -165,30 +181,59 @@ void readMuxButtons() {
       buttonStates[i] = isPressed;
       prevButtonStates[i] = isPressed;
 
-      Serial.print("Button ");
+      Serial.print("Mux 1 Button ");
       Serial.print(i);
       Serial.println(isPressed ? " pressed" : " released");
 
-      // Call function toggle handler
       toggleFunction(i, isPressed);
+    }
+
+    // Read from the second multiplexer
+    digitalWrite(muxS0Pin2, (i & 1) ? HIGH : LOW);
+    digitalWrite(muxS1Pin2, (i & 2) ? HIGH : LOW);
+    digitalWrite(muxS2Pin2, (i & 4) ? HIGH : LOW);
+    digitalWrite(muxS3Pin2, (i & 8) ? HIGH : LOW);
+
+    buttonState = digitalRead(muxSigPin2);
+    isPressed = (buttonState == LOW);
+
+    if (isPressed != prevButtonStates[i + 16]) {
+      buttonStates[i + 16] = isPressed;
+      prevButtonStates[i + 16] = isPressed;
+
+      Serial.print("Mux 2 Button ");
+      Serial.print(i);
+      Serial.println(isPressed ? " pressed" : " released");
+
+      toggleFunction(i + 16, isPressed);
     }
   }
 }
 
+
+
+
+
 void regWrite(int pin, bool state) {
-  int reg = (pin / 8) == 0 ? 1 : 0;
-  int actualPin = pin % 8;
-  
-  digitalWrite(latchPin, LOW);
-  for (int i = 0; i < numOfRegisters; i++) {
-    byte* states = &registerState[i];
-    if (i == reg) {
-      bitWrite(*states, actualPin, state);
+    int reg = pin / 8; // Determine which register the pin belongs to
+    int actualPin = pin % 8; // Determine the pin within the register
+
+    digitalWrite(latchPin, LOW);
+
+    // Update the target register's state
+    bitWrite(registerState[reg], actualPin, state);
+
+    // Write all registers in sequence
+    for (int i = numOfRegisters - 1; i >= 0; i--) {
+        shiftOut(dataPin, clockPin, MSBFIRST, registerState[i]);
     }
-    shiftOut(dataPin, clockPin, MSBFIRST, *states);
-  }
-  digitalWrite(latchPin, HIGH);
+
+    digitalWrite(latchPin, HIGH);
 }
+
+
+
+
 
 void updateActiveNotes() {
   activeNotesCount = 0;
@@ -287,6 +332,23 @@ void loadPreset(int presetIndex) {
 void loop() {
   readMuxButtons();
 
+  for (int i = 0; i < 33; i++) {
+    regWrite(i, HIGH);
+    delay(10);
+  }
+
+  delay(50);
+  
+
+  for (int i = 0; i < 33; i++) {
+    regWrite(i, LOW);
+    delay(10);
+  }
+
+  delay(50);
+
+
+
   // Check if preset button is pressed long enough to save
   if (presetButtonPressed && (millis() - presetButtonPressTime) >= 2000) {
     savePreset(PRESET1_ADDRESS);  // Save to RAM instead of EEPROM
@@ -294,7 +356,7 @@ void loop() {
   }
 
   // Handle LEDs, active notes, and note cycling as usual
-  for (int i = 0; i < 16; i++) {
+  for (int i = 0; i < 32; i++) {
     if (ledFlashing[i] && millis() - ledFlashTimers[i] >= flashDuration) {
       ledFlashing[i] = false;
       regWrite(i, buttonStates[i] ? HIGH : LOW);
