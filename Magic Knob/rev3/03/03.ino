@@ -54,9 +54,17 @@ const int encoderPinB = 16;
 int lastEncoderState = HIGH;
 
 // Function states
-bool function1State = false;  // false = OFF (no octave shifting), true = ON (octave shifting)
-bool function2State = false;  // false = OFF (no arpeggio), true = ON (arpeggio)
-bool function3State = false;  // false = OFF, true = ON (random note)
+bool octave_shift_State = false;  // false = OFF (no octave shifting), true = ON (octave shifting)
+bool arp_state = false;  // false = OFF (no arpeggio), true = ON (arpeggio)
+bool randomizer_state = false;  // false = OFF, true = ON (random note)
+
+#define FIRST_PRESET_BUTTON 20
+#define LAST_PRESET_BUTTON 31
+#define EEPROM_PRESET_BASE_ADDRESS 0 // Base address in EEPROM for presets
+#define NOTES_COUNT 12 // Only saving buttons 1-12
+
+// Adjust for multiple presets in RAM
+bool presets[LAST_PRESET_BUTTON - FIRST_PRESET_BUTTON + 1][NOTES_COUNT];
 
 unsigned long lastNoteChangeTime = 0;  // Timer for note cycling
 int bpm = 120;  // Default BPM
@@ -66,47 +74,45 @@ int cycleInterval;  // Interval for note cycling in milliseconds
 
 // Function toggle handler
 void toggleFunction(int buttonIndex, bool isPressed) {
-  // Toggle function 1 when button 12 is pressed or released
-  if (buttonIndex == 12) {
-    if (isPressed || !isPressed) {  // Trigger on both press and release
-      function1State = !function1State;  // Toggle the state
-      Serial.print("Function 1 ");
-      Serial.println(function1State ? "ON" : "OFF");
-    }
+  // Toggle function for Octave Shift (button 14)
+  if (buttonIndex == 14 && isPressed) { // Detect press event only
+    octave_shift_State = !octave_shift_State; // Toggle state
+    Serial.print("Function 1 (Octave Shift) ");
+    Serial.println(octave_shift_State ? "ON" : "OFF");
+    buttonStates[buttonIndex] = octave_shift_State; // Sync button state
+    regWrite(buttonIndex, octave_shift_State ? HIGH : LOW); // Update LED
   }
 
-  if (buttonIndex == 13) {
-    if (isPressed || !isPressed) {  // Trigger on both press and release
-      function2State = !function2State;  // Toggle the state
-      Serial.print("Function 2 ");
-      Serial.println(function2State ? "ON" : "OFF");
-    }
+  // Toggle function for Arpeggio (button 15)
+  if (buttonIndex == 15 && isPressed) { // Detect press event only
+    arp_state = !arp_state; // Toggle state
+    Serial.print("Function 2 (Arpeggio) ");
+    Serial.println(arp_state ? "ON" : "OFF");
+    buttonStates[buttonIndex] = arp_state; // Sync button state
+    regWrite(buttonIndex, arp_state ? HIGH : LOW); // Update LED
   }
 
-  if (buttonIndex == 14) {  // Toggle function 3 (Random note)
-    if (isPressed || !isPressed) {  
-      function3State = !function3State;
-      Serial.print("Function 3 ");
-      Serial.println(function3State ? "ON" : "OFF");
-    }
+  // Toggle function for Randomizer (button 16)
+  if (buttonIndex == 16 && isPressed) { // Detect press event only
+    randomizer_state = !randomizer_state; // Toggle state
+    Serial.print("Function 3 (Randomizer) ");
+    Serial.println(randomizer_state ? "ON" : "OFF");
+    buttonStates[buttonIndex] = randomizer_state; // Sync button state
+    regWrite(buttonIndex, randomizer_state ? HIGH : LOW); // Update LED
   }
 
-   if (buttonIndex == PRESET1_BUTTON) {
-    if (isPressed) {
-      presetButtonPressTime = millis(); // Record press time
-      presetButtonPressed = true;
-    } else {
-      unsigned long pressDuration = millis() - presetButtonPressTime;
-      presetButtonPressed = false;
-
-      if (pressDuration >= 2000) {
-        savePreset(PRESET1_ADDRESS); // Save preset if held for >2 seconds
-      } else if (pressDuration < 2000) {
-        loadPreset(PRESET1_ADDRESS); // Load preset if held for <2 seconds
-      }
-    }
+  // Handle preset buttons (20–31)
+  if (buttonIndex >= FIRST_PRESET_BUTTON && buttonIndex <= LAST_PRESET_BUTTON) {
+    handlePresetButton(buttonIndex, isPressed);
   }
 }
+
+
+
+
+
+
+
 
 void loadPresetFromEEPROM(int presetIndex) {
   // Check if preset data exists in EEPROM and load it
@@ -166,9 +172,11 @@ void clearShiftRegister() {
   digitalWrite(latchPin, HIGH);
 }
 
+
 void readMuxButtons() {
+  // Process buttons 0–15 from the first multiplexer
   for (int i = 0; i < 16; i++) {
-    // Read from the first multiplexer
+    // Set multiplexer address
     digitalWrite(muxS0Pin, (i & 1) ? HIGH : LOW);
     digitalWrite(muxS1Pin, (i & 2) ? HIGH : LOW);
     digitalWrite(muxS2Pin, (i & 4) ? HIGH : LOW);
@@ -177,40 +185,58 @@ void readMuxButtons() {
     int buttonState = digitalRead(muxSigPin);
     bool isPressed = (buttonState == LOW);
 
-    if (isPressed != prevButtonStates[i]) {
-      buttonStates[i] = isPressed;
-      prevButtonStates[i] = isPressed;
-
-      Serial.print("Mux 1 Button ");
-      Serial.print(i);
-      Serial.println(isPressed ? " pressed" : " released");
-
-      toggleFunction(i, isPressed);
+    // Process toggle buttons (0–11)
+    if (i >= 0 && i <= 11) {
+      if (isPressed && !prevButtonStates[i]) { // Press event
+        buttonStates[i] = !buttonStates[i];    // Toggle state
+        Serial.print("Toggle Button ");
+        Serial.print(i);
+        Serial.println(buttonStates[i] ? " ON" : " OFF");
+        toggleFunction(i, buttonStates[i]);    // Call toggle function
+      }
+    }
+    // Process toggle function buttons (14–16)
+    else if (i >= 14 && i <= 16) {
+      if (isPressed && !prevButtonStates[i]) { // Detect press event only
+        toggleFunction(i, true);              // Call toggle function on press
+      }
     }
 
-    // Read from the second multiplexer
+    // Update previous state
+    prevButtonStates[i] = isPressed;
+  }
+
+  // Process buttons 16–31 from the second multiplexer
+  for (int i = 0; i < 16; i++) {
+    // Set multiplexer address for the second multiplexer
     digitalWrite(muxS0Pin2, (i & 1) ? HIGH : LOW);
     digitalWrite(muxS1Pin2, (i & 2) ? HIGH : LOW);
     digitalWrite(muxS2Pin2, (i & 4) ? HIGH : LOW);
     digitalWrite(muxS3Pin2, (i & 8) ? HIGH : LOW);
 
-    buttonState = digitalRead(muxSigPin2);
-    isPressed = (buttonState == LOW);
+    int buttonState = digitalRead(muxSigPin2);
+    bool isPressed = (buttonState == LOW);
 
-    if (isPressed != prevButtonStates[i + 16]) {
-      buttonStates[i + 16] = isPressed;
-      prevButtonStates[i + 16] = isPressed;
+    int buttonIndex = i + 16;
 
-      Serial.print("Mux 2 Button ");
-      Serial.print(i);
-      Serial.println(isPressed ? " pressed" : " released");
-
-      toggleFunction(i + 16, isPressed);
+    // Handle function buttons (button indices 16–19)
+    if (buttonIndex >= 16 && buttonIndex <= 19) {
+      if (isPressed && !prevButtonStates[buttonIndex]) { // Detect press event only
+        toggleFunction(buttonIndex, true);              // Call toggle function on press
+      }
     }
+
+    // Handle preset buttons (20–31)
+    else if (buttonIndex >= FIRST_PRESET_BUTTON && buttonIndex <= LAST_PRESET_BUTTON) {
+      if (isPressed != prevButtonStates[buttonIndex]) { // Detect state change
+        toggleFunction(buttonIndex, isPressed);         // Call toggle function
+      }
+    }
+
+    // Update previous state
+    prevButtonStates[buttonIndex] = isPressed;
   }
 }
-
-
 
 
 
@@ -252,14 +278,14 @@ void EncoderIntoNotes() {
   if (encoderState != lastEncoderState && encoderState == LOW) {
     if (digitalRead(encoderPinB) == HIGH) {
       // Encoder turned right
-      if (function3State) {
+      if (randomizer_state) {
         // Random note selection when function 3 is active
         currentNoteIndex = random(0, activeNotesCount);  // Pick a random note
       } else {
         // Normal behavior
         currentNoteIndex++;
         if (currentNoteIndex >= activeNotesCount) {
-          if (function1State) {  // Only shift octave if Function 1 is ON
+          if (octave_shift_State) {  // Only shift octave if Function 1 is ON
             octaveShift++;
           }
           currentNoteIndex = 0;
@@ -267,14 +293,14 @@ void EncoderIntoNotes() {
       }
     } else {
       // Encoder turned left
-      if (function3State) {
+      if (randomizer_state) {
         // Random note selection when function 3 is active
         currentNoteIndex = random(0, activeNotesCount);  // Pick a random note
       } else {
         // Normal behavior
         currentNoteIndex--;
         if (currentNoteIndex < 0) {
-          if (function1State) {
+          if (octave_shift_State) {
             octaveShift--;
           }
           currentNoteIndex = activeNotesCount - 1;
@@ -288,55 +314,82 @@ void EncoderIntoNotes() {
 }
 
 
-// Function to save a preset to EEPROM
-// Function to save a preset to RAM
-void savePreset(int presetIndex) {
-  // Flash the preset button LED while saving
-  regWrite(PRESET1_BUTTON, LOW); // Turn LED off
-  regWrite(PRESET1_BUTTON, HIGH); // Turn LED on
-
-  // Save the buttonStates to preset1 in RAM
-  for (int i = 0; i < NOTES_COUNT; i++) {
-    preset1[i] = buttonStates[i];
-    EEPROM.write(PRESET1_ADDRESS + i, preset1[i]); // Save to EEPROM
-  }
-
-  regWrite(PRESET1_BUTTON, LOW); // Turn LED off after saving
-}
+#define FIRST_PRESET_BUTTON 20
+#define LAST_PRESET_BUTTON 31
+#define EEPROM_PRESET_BASE_ADDRESS 0 // Base address in EEPROM for presets
+#define NOTES_COUNT 12 // Only saving buttons 1-12
 
 
+void handlePresetButton(int buttonIndex, bool isPressed) {
+  static unsigned long presetPressTimes[LAST_PRESET_BUTTON - FIRST_PRESET_BUTTON + 1] = {0};
+  int presetIndex = buttonIndex - FIRST_PRESET_BUTTON;
 
-// Function to load a preset from EEPROM
-// Function to load a preset from RAM
-void loadPreset(int presetIndex) {
-  bool hasData = false;
-  
-  // Load the preset data from RAM into buttonStates
-  for (int i = 0; i < NOTES_COUNT; i++) {
-    buttonStates[i] = preset1[i];
-    if (preset1[i] != 0) hasData = true; // Check for valid data
-  }
+  if (isPressed) {
+    presetPressTimes[presetIndex] = millis(); // Start the timer for the button
+  } else {
+    unsigned long pressDuration = millis() - presetPressTimes[presetIndex];
+    presetPressTimes[presetIndex] = 0; // Reset the timer
 
-  if (hasData) {
-    // Flash the preset button LED on successful load
-    for (int i = 0; i < 3; i++) {
-      regWrite(PRESET1_BUTTON, HIGH);
-      regWrite(PRESET1_BUTTON, LOW);
+    if (pressDuration >= 2000) {
+      savePreset(presetIndex); // Save preset if held for >2 seconds
+    } else if (pressDuration < 2000) {
+      loadPreset(presetIndex); // Load preset if held for <2 seconds
     }
   }
 }
 
+void savePreset(int presetIndex) {
+  // Flash the corresponding preset button LED while saving
+  int buttonIndex = FIRST_PRESET_BUTTON + presetIndex;
+  regWrite(buttonIndex, HIGH);
+  delay(100);
+  regWrite(buttonIndex, LOW);
+
+  // Save the buttonStates to the preset in RAM and EEPROM
+  for (int i = 0; i < NOTES_COUNT; i++) {
+    presets[presetIndex][i] = buttonStates[i];
+    EEPROM.write(EEPROM_PRESET_BASE_ADDRESS + presetIndex * NOTES_COUNT + i, buttonStates[i]);
+  }
+
+  Serial.print("Saved preset ");
+  Serial.println(presetIndex);
+}
+
+void loadPreset(int presetIndex) {
+  bool hasData = false;
+
+  // Load the preset data from EEPROM into RAM and buttonStates
+  for (int i = 0; i < NOTES_COUNT; i++) {
+    presets[presetIndex][i] = EEPROM.read(EEPROM_PRESET_BASE_ADDRESS + presetIndex * NOTES_COUNT + i);
+    buttonStates[i] = presets[presetIndex][i];
+    if (presets[presetIndex][i] != 0) hasData = true; // Check for valid data
+  }
+
+  if (hasData) {
+    // Flash the corresponding preset button LED on successful load
+    int buttonIndex = FIRST_PRESET_BUTTON + presetIndex;
+    for (int i = 0; i < 3; i++) {
+      regWrite(buttonIndex, HIGH);
+      delay(50);
+      regWrite(buttonIndex, LOW);
+      delay(50);
+    }
+  }
+
+  Serial.print("Loaded preset ");
+  Serial.println(presetIndex);
+}
 
 
-// In the loop function, handle immediate save upon long press
+
+
 void loop() {
   readMuxButtons();
 
-  // Check if preset button is pressed long enough to save
-  if (presetButtonPressed && (millis() - presetButtonPressTime) >= 2000) {
-    savePreset(PRESET1_ADDRESS);  // Save to RAM instead of EEPROM
-    presetButtonPressed = false;  // Prevent re-triggering
-  }
+  // Ensure LEDs for buttons 14, 15, and 16 stay on/off based on their states
+  regWrite(14, octave_shift_State ? HIGH : LOW);
+  regWrite(15, arp_state ? HIGH : LOW);
+  regWrite(16, randomizer_state ? HIGH : LOW);
 
   // Handle LEDs, active notes, and note cycling as usual
   for (int i = 0; i < 32; i++) {
@@ -347,8 +400,9 @@ void loop() {
       regWrite(i, buttonStates[i] ? HIGH : LOW);
     }
   }
+
   updateActiveNotes();
-  if (function2State) {
+  if (arp_state) {
     cycleNotes();
     adjustBPM();
   } else {
@@ -358,11 +412,12 @@ void loop() {
 
 
 
+
 void sendMidiNote() {
     int note = activeNotes[currentNoteIndex];
 
     // Un-Comment this to have the octave shift only work with the function 1 knob
-    //if (function1State) {
+    //if (octave_shift_State) {
     //    note += octaveShift * 12;  // Adjust note based on octave shift if Function 1 is ON
     //}
     note += octaveShift * 12;
@@ -402,7 +457,7 @@ void cycleNotes() {
 
   if (millis() - lastNoteChangeTime >= cycleInterval) {
     if (activeNotesCount > 0) {
-      if (function3State) {
+      if (randomizer_state) {
         // Function 3: Select a random note from active notes
         int randomIndex = random(0, activeNotesCount);  // Get a random index
         currentNoteIndex = randomIndex;  // Use that index

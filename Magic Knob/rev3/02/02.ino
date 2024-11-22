@@ -54,9 +54,9 @@ const int encoderPinB = 16;
 int lastEncoderState = HIGH;
 
 // Function states
-bool function1State = false;  // false = OFF (no octave shifting), true = ON (octave shifting)
-bool function2State = false;  // false = OFF (no arpeggio), true = ON (arpeggio)
-bool function3State = false;  // false = OFF, true = ON (random note)
+bool octave_shift_State = false;  // false = OFF (no octave shifting), true = ON (octave shifting)
+bool arp_state = false;  // false = OFF (no arpeggio), true = ON (arpeggio)
+bool randomizer_state = false;  // false = OFF, true = ON (random note)
 
 unsigned long lastNoteChangeTime = 0;  // Timer for note cycling
 int bpm = 120;  // Default BPM
@@ -67,27 +67,27 @@ int cycleInterval;  // Interval for note cycling in milliseconds
 // Function toggle handler
 void toggleFunction(int buttonIndex, bool isPressed) {
   // Toggle function 1 when button 12 is pressed or released
-  if (buttonIndex == 12) {
+  if (buttonIndex == 14) {
     if (isPressed || !isPressed) {  // Trigger on both press and release
-      function1State = !function1State;  // Toggle the state
+      octave_shift_State = !octave_shift_State;  // Toggle the state
       Serial.print("Function 1 ");
-      Serial.println(function1State ? "ON" : "OFF");
+      Serial.println(octave_shift_State ? "ON" : "OFF");
     }
   }
 
-  if (buttonIndex == 13) {
+  if (buttonIndex == 15) {
     if (isPressed || !isPressed) {  // Trigger on both press and release
-      function2State = !function2State;  // Toggle the state
+      arp_state = !arp_state;  // Toggle the state
       Serial.print("Function 2 ");
-      Serial.println(function2State ? "ON" : "OFF");
+      Serial.println(arp_state ? "ON" : "OFF");
     }
   }
 
-  if (buttonIndex == 14) {  // Toggle function 3 (Random note)
+  if (buttonIndex == 16) {  // Toggle function 3 (Random note)
     if (isPressed || !isPressed) {  
-      function3State = !function3State;
+      randomizer_state = !randomizer_state;
       Serial.print("Function 3 ");
-      Serial.println(function3State ? "ON" : "OFF");
+      Serial.println(randomizer_state ? "ON" : "OFF");
     }
   }
 
@@ -177,16 +177,33 @@ void readMuxButtons() {
     int buttonState = digitalRead(muxSigPin);
     bool isPressed = (buttonState == LOW);
 
-    if (isPressed != prevButtonStates[i]) {
-      buttonStates[i] = isPressed;
-      prevButtonStates[i] = isPressed;
-
-      Serial.print("Mux 1 Button ");
-      Serial.print(i);
-      Serial.println(isPressed ? " pressed" : " released");
-
-      toggleFunction(i, isPressed);
+    // Handle toggle buttons (0-11 and 14-19)
+    if ((i >= 0 && i <= 11) || (i >= 14 && i <= 19)) {
+      if (isPressed && !prevButtonStates[i]) { // Detect press event
+        buttonStates[i] = !buttonStates[i];    // Toggle state
+        Serial.print("Toggle Button ");
+        Serial.print(i);
+        Serial.println(buttonStates[i] ? " ON" : " OFF");
+        toggleFunction(i, buttonStates[i]);    // Call function with new state
+      }
     }
+    // Handle momentary buttons (12 and 13)
+    else if (i == 12 || i == 13) {
+      if (isPressed != prevButtonStates[i]) { // Detect state change
+        buttonStates[i] = isPressed;          // Set state to current press
+        Serial.print("Momentary Button ");
+        Serial.print(i);
+        Serial.println(isPressed ? " pressed" : " released");
+        toggleFunction(i, isPressed);         // Call function with current state
+      }
+    }
+    // Handle other buttons as needed
+    else {
+      // Existing behavior for other buttons
+    }
+
+    // Update previous state
+    prevButtonStates[i] = isPressed;
 
     // Read from the second multiplexer
     digitalWrite(muxS0Pin2, (i & 1) ? HIGH : LOW);
@@ -197,18 +214,39 @@ void readMuxButtons() {
     buttonState = digitalRead(muxSigPin2);
     isPressed = (buttonState == LOW);
 
-    if (isPressed != prevButtonStates[i + 16]) {
-      buttonStates[i + 16] = isPressed;
-      prevButtonStates[i + 16] = isPressed;
+    int buttonIndex = i + 16;
 
-      Serial.print("Mux 2 Button ");
-      Serial.print(i);
-      Serial.println(isPressed ? " pressed" : " released");
-
-      toggleFunction(i + 16, isPressed);
+    // Handle toggle buttons (16-27 and 30-35)
+    if ((buttonIndex >= 0 && buttonIndex <= 11) || (buttonIndex >= 14 && buttonIndex <= 19)) {
+      if (isPressed && !prevButtonStates[buttonIndex]) { // Detect press event
+        buttonStates[buttonIndex] = !buttonStates[buttonIndex]; // Toggle state
+        Serial.print("Toggle Button ");
+        Serial.print(buttonIndex);
+        Serial.println(buttonStates[buttonIndex] ? " ON" : " OFF");
+        toggleFunction(buttonIndex, buttonStates[buttonIndex]); // Call function with new state
+      }
     }
+    // Handle momentary buttons (28 and 29)
+    else if (buttonIndex == 12 || buttonIndex == 13) {
+      if (isPressed != prevButtonStates[buttonIndex]) { // Detect state change
+        buttonStates[buttonIndex] = isPressed;          // Set state to current press
+        Serial.print("Momentary Button ");
+        Serial.print(buttonIndex);
+        Serial.println(isPressed ? " pressed" : " released");
+        toggleFunction(buttonIndex, isPressed);         // Call function with current state
+      }
+    }
+    // Handle other buttons as needed
+    else {
+      // Existing behavior for other buttons
+    }
+
+    // Update previous state
+    prevButtonStates[buttonIndex] = isPressed;
   }
 }
+
+
 
 
 
@@ -252,14 +290,14 @@ void EncoderIntoNotes() {
   if (encoderState != lastEncoderState && encoderState == LOW) {
     if (digitalRead(encoderPinB) == HIGH) {
       // Encoder turned right
-      if (function3State) {
+      if (randomizer_state) {
         // Random note selection when function 3 is active
         currentNoteIndex = random(0, activeNotesCount);  // Pick a random note
       } else {
         // Normal behavior
         currentNoteIndex++;
         if (currentNoteIndex >= activeNotesCount) {
-          if (function1State) {  // Only shift octave if Function 1 is ON
+          if (octave_shift_State) {  // Only shift octave if Function 1 is ON
             octaveShift++;
           }
           currentNoteIndex = 0;
@@ -267,14 +305,14 @@ void EncoderIntoNotes() {
       }
     } else {
       // Encoder turned left
-      if (function3State) {
+      if (randomizer_state) {
         // Random note selection when function 3 is active
         currentNoteIndex = random(0, activeNotesCount);  // Pick a random note
       } else {
         // Normal behavior
         currentNoteIndex--;
         if (currentNoteIndex < 0) {
-          if (function1State) {
+          if (octave_shift_State) {
             octaveShift--;
           }
           currentNoteIndex = activeNotesCount - 1;
@@ -348,7 +386,7 @@ void loop() {
     }
   }
   updateActiveNotes();
-  if (function2State) {
+  if (arp_state) {
     cycleNotes();
     adjustBPM();
   } else {
@@ -362,7 +400,7 @@ void sendMidiNote() {
     int note = activeNotes[currentNoteIndex];
 
     // Un-Comment this to have the octave shift only work with the function 1 knob
-    //if (function1State) {
+    //if (octave_shift_State) {
     //    note += octaveShift * 12;  // Adjust note based on octave shift if Function 1 is ON
     //}
     note += octaveShift * 12;
@@ -402,7 +440,7 @@ void cycleNotes() {
 
   if (millis() - lastNoteChangeTime >= cycleInterval) {
     if (activeNotesCount > 0) {
-      if (function3State) {
+      if (randomizer_state) {
         // Function 3: Select a random note from active notes
         int randomIndex = random(0, activeNotesCount);  // Get a random index
         currentNoteIndex = randomIndex;  // Use that index
