@@ -1,0 +1,3 @@
+Channels Mono
+Sample Rate 44100 Hz
+Encoding signed 16 bit PCMs
