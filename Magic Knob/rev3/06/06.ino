@@ -180,7 +180,7 @@ void handleOctaveButtonFlash(int buttonIndex) {
 
 void readMuxButtons() {
   const int octaveShiftMin = -5; // Minimum octave shift
-  const int octaveShiftMax = 5;  // Maximum octave shift
+  const int octaveShiftMax = 4;  // Maximum octave shift
 
   // Process buttons 0–15 from the first multiplexer
   for (int i = 0; i < 16; i++) {
