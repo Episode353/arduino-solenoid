@@ -1,5 +1,3 @@
-
-
 #include <MIDIUSB.h>
 #include <EEPROM.h>
 
