@@ -1,176 +1,77 @@
-// This code is aimed to be an analogue of an omnichord, where when you press the one of the Seven Chord buttons, a chord is played
-// The Chord buttons are mommentary buttons and the chord should only play when the chord is being pressed and when the button is realsed it should stop playing
+/*
+ * USB MIDI to VS1053B Bridge for RP2040 with explicit USB descriptor
+ */
 
+#include <SPI.h>
+#include <Adafruit_TinyUSB.h>
+#include <MIDI.h>
 
-// 01 This peice of code of mearly just a demonstration of the
-// leds and lights, with no actual midi being sent or recieved.
-// the arudino simply confirms a button press with the led being light up and the 
-// output in the console
+// USB MIDI object with explicit descriptor
+Adafruit_USBD_MIDI usb_midi(1);  // 1 = number of cables
 
-// 02 Made the Chord buttons I-Vii (buttons 0-6) have a Mommentary press
-// Meaning they do not hold or "switch"
-// the led turns on and off directly with the button
-// Specified the Button mapping for easy coding
+// Create a MIDI interface using the USB MIDI object
+MIDI_CREATE_INSTANCE(Adafruit_USBD_MIDI, usb_midi, MIDI);
 
-
-// Button Mapping
-// Button 0 = Chord I
-// Button 1 = Chord II
-// Button 2 = Chord III
-// Button 3 = Chord VI
-// Button 4 = Chord V
-// Button 5 = Chord VI
-// Button 6 = Chord VII
-// Button 7 = Note C
-// Button 8 = Note C#
-// Button 9 = Note D
-// Button 10 = Note D#
-// Button 11 = Note E
-// Button 12 = Note F
-// Button 13 = Note F#
-// Button 14 = Note G
-// Button 15 = Note G#
-// Button 16 = Note A
-// Button 17 = Note A#
-// Button 18 = Note B
-// Button 19 = Major Scale
-// Button 20 = Minor Scale
-// Button 21 = Dorian Scale
-// Button 22 = Phrygian Scale
-// Button 23 = Lydian Scale
-// Button 24 = Mixolydian Scale
-// Button 25 = Locrian Scale
-// Button 26 = Harmonic Scale
-// Button 27 = Latch (Currently not used, do not use in the code)
-// Button 28 = Bass (Currently not used, do not use in the code)
-// Button 29 = Chromatic (Currently not used, do not use in the code)
-// Button 30 = Random (Currently not used, do not use in the code)
-
-
-// Pin Definitions for Multiplexer 1
-#define MUX1_SIG_PIN A3
-#define MUX1_S0_PIN 2
-#define MUX1_S1_PIN 3
-#define MUX1_S2_PIN 4
-#define MUX1_S3_PIN 5
-
-// Pin Definitions for Multiplexer 2
-#define MUX2_SIG_PIN A2
-#define MUX2_S0_PIN 12
-#define MUX2_S1_PIN 11
-#define MUX2_S2_PIN 10
-#define MUX2_S3_PIN 9
-
-// Pin Definitions for Shift Registers
-#define SR_LATCH_PIN 8
-#define SR_CLOCK_PIN 7
-#define SR_DATA_PIN 6
-
-// Number of buttons
-const int NUM_BUTTONS = 32;
-
-// State Arrays
-bool buttonStates[NUM_BUTTONS] = {false};
-bool prevButtonStates[NUM_BUTTONS] = {false};
-
-// Function to write to shift registers
-void writeShiftRegister(byte* states) {
-  digitalWrite(SR_LATCH_PIN, LOW);
-  for (int i = 3; i >= 0; i--) { // Four shift registers
-    shiftOut(SR_DATA_PIN, SR_CLOCK_PIN, MSBFIRST, states[i]);
-  }
-  digitalWrite(SR_LATCH_PIN, HIGH);
-}
-
-// Function to read a button from a multiplexer
-bool readMuxButton(int muxIndex, int buttonIndex) {
-  int sigPin, s0Pin, s1Pin, s2Pin, s3Pin;
-  if (muxIndex == 0) {
-    sigPin = MUX1_SIG_PIN;
-    s0Pin = MUX1_S0_PIN;
-    s1Pin = MUX1_S1_PIN;
-    s2Pin = MUX1_S2_PIN;
-    s3Pin = MUX1_S3_PIN;
-  } else {
-    sigPin = MUX2_SIG_PIN;
-    s0Pin = MUX2_S0_PIN;
-    s1Pin = MUX2_S1_PIN;
-    s2Pin = MUX2_S2_PIN;
-    s3Pin = MUX2_S3_PIN;
-  }
-
-  // Set multiplexer address
-  digitalWrite(s0Pin, (buttonIndex & 1) ? HIGH : LOW);
-  digitalWrite(s1Pin, (buttonIndex & 2) ? HIGH : LOW);
-  digitalWrite(s2Pin, (buttonIndex & 4) ? HIGH : LOW);
-  digitalWrite(s3Pin, (buttonIndex & 8) ? HIGH : LOW);
-
-  delayMicroseconds(10); // Allow settling time
-  return digitalRead(sigPin) == LOW; // Button pressed is LOW
-}
+// VS1053 pin definitions
+#define VS1053_CS      A0   // GPIO pin for VS1053 Chip Select
+#define VS1053_RESET   A1   // GPIO pin for VS1053 Reset
+#define VS1053_DREQ    A2   // GPIO pin for VS1053 Data Request
+#define VS1053_DCS     A3   // Data Chip Select (for MIDI and audio data)
 
 void setup() {
-  Serial.begin(9600);
+  Serial.begin(115200);
+  
+  // Ensure TinyUSB MIDI is enabled before calling begin
+  TinyUSBDevice.setID(0x239A, 0x811E);  // Adafruit's MIDI-compliant PID
+  TinyUSBDevice.setManufacturerDescriptor("Adafruit");
+  TinyUSBDevice.setProductDescriptor("Feather RP2040 MIDI");
 
-  // Initialize multiplexer control pins
-  pinMode(MUX1_S0_PIN, OUTPUT);
-  pinMode(MUX1_S1_PIN, OUTPUT);
-  pinMode(MUX1_S2_PIN, OUTPUT);
-  pinMode(MUX1_S3_PIN, OUTPUT);
-  pinMode(MUX1_SIG_PIN, INPUT_PULLUP);
+  usb_midi.begin();  // Ensure USB MIDI is started before TinyUSB
 
-  pinMode(MUX2_S0_PIN, OUTPUT);
-  pinMode(MUX2_S1_PIN, OUTPUT);
-  pinMode(MUX2_S2_PIN, OUTPUT);
-  pinMode(MUX2_S3_PIN, OUTPUT);
-  pinMode(MUX2_SIG_PIN, INPUT_PULLUP);
+  // Start TinyUSB
+  if (!TinyUSBDevice.begin()) {
+    Serial.println("Failed to initialize TinyUSB!");
+    while (1) delay(1);  // Halt if USB initialization fails
+  }
 
-  // Initialize shift register control pins
-  pinMode(SR_LATCH_PIN, OUTPUT);
-  pinMode(SR_CLOCK_PIN, OUTPUT);
-  pinMode(SR_DATA_PIN, OUTPUT);
+  // Wait for the USB device to mount
+  while (!TinyUSBDevice.mounted()) delay(10);
 
-  // Clear shift register
-  byte initialStates[4] = {0};
-  writeShiftRegister(initialStates);
+  // Initialize MIDI
+  MIDI.begin(MIDI_CHANNEL_OMNI);
+
+  // Set up MIDI callbacks
+  MIDI.setHandleNoteOn(handleNoteOn);
+  MIDI.setHandleNoteOff(handleNoteOff);
+  MIDI.setHandlePitchBend(handlePitchBend);
+  MIDI.setHandleControlChange(handleControlChange);
+  MIDI.setHandleProgramChange(handleProgramChange);
+
+  Serial.println("Feather RP2040 MIDI Device Ready!");
 }
 
 void loop() {
-  byte shiftRegisterStates[4] = {0};
-
-  for (int i = 0; i < NUM_BUTTONS; i++) {
-    int muxIndex = i / 16; // 0 for MUX1, 1 for MUX2
-    int muxButtonIndex = i % 16;
-
-    bool isPressed = readMuxButton(muxIndex, muxButtonIndex);
-    if (i <= 6) {
-      // Buttons 0-6: Momentary behavior
-      buttonStates[i] = isPressed;
-      if (isPressed && !prevButtonStates[i]) {
-        Serial.print("Button ");
-        Serial.print(i);
-        Serial.println(" pressed");
-      }
-    } else {
-      // Other buttons: Toggle behavior
-      if (isPressed && !prevButtonStates[i]) {
-        Serial.print("Button ");
-        Serial.print(i);
-        Serial.println(" pressed");
-        buttonStates[i] = !buttonStates[i];
-      }
-    }
-    prevButtonStates[i] = isPressed;
-
-    // Update shift register state for LEDs
-    if (buttonStates[i]) {
-      shiftRegisterStates[i / 8] |= (1 << (i % 8)); // Set bit
-    } else {
-      shiftRegisterStates[i / 8] &= ~(1 << (i % 8)); // Clear bit
-    }
-  }
-
-  writeShiftRegister(shiftRegisterStates);
-  delay(50); // Debounce delay
+  // Read incoming MIDI messages
+  MIDI.read();
 }
 
+// MIDI callback functions
+void handleNoteOn(byte channel, byte note, byte velocity) {
+  Serial.printf("Note On: ch=%d, note=%d, velocity=%d\n", channel, note, velocity);
+}
+
+void handleNoteOff(byte channel, byte note, byte velocity) {
+  Serial.printf("Note Off: ch=%d, note=%d, velocity=%d\n", channel, note, velocity);
+}
+
+void handlePitchBend(byte channel, int bend) {
+  Serial.printf("Pitch Bend: ch=%d, bend=%d\n", channel, bend);
+}
+
+void handleControlChange(byte channel, byte number, byte value) {
+  Serial.printf("Control Change: ch=%d, number=%d, value=%d\n", channel, number, value);
+}
+
+void handleProgramChange(byte channel, byte number) {
+  Serial.printf("Program Change: ch=%d, number=%d\n", channel, number);
+}
