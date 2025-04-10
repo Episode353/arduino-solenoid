@@ -10,9 +10,8 @@
   3. Complexity is hard-coded to 1.
   4. Inversion is hard-coded to 1.
   5. Sends MIDI Note On and Note Off messages over USB.
-  6. Allows spanning three octaves with octave shift buttons.
 */
-
+#include <Midier.h>
 #include <Arduino.h>
 #include <MIDIUSB.h> // Include MIDIUSB library
 
@@ -59,15 +58,10 @@ const int chordSizes[1] = {3};
 // Button Mapping
 // Button 0-6: Chords I-VII (Momentary)
 // Button 7-18: Notes C to B
-// Button 19-20: Octave Shift Up and Down
-// Button 21-30: Major Scales (for future expansion, currently only Major Scale is used)
+// Button 19-24: Major Scales (for future expansion, currently only Major Scale is used)
 const int NUM_BUTTONS = 31;
 
-// Octave Shift Definitions
-#define OCTAVE_UP_BUTTON 19
-#define OCTAVE_DOWN_BUTTON 20
-const int MIN_OCTAVE_SHIFT = -1; // One octave down
-const int MAX_OCTAVE_SHIFT = 1;  // One octave up
+int octaveShift = 0;
 
 // Multiplexer Pin Definitions
 // MUX1
@@ -106,9 +100,6 @@ int activeScaleIndex = -1;  // -1 means no active scale
 
 // Chord Notes (Maximum size is 3 for complexity 1)
 String chord[3];
-
-// Octave Shift Variable
-int octaveShift = 0; // 0 = default octave, -1 = one octave down, +1 = one octave up
 
 // ===================== Helper Functions =====================
 
@@ -178,27 +169,24 @@ struct MidiNote {
   bool active;
 } midiNotes[3]; // Supports up to 3 simultaneous notes (triad)
 
-// Function to send MIDI Note On
 void sendMidiNoteOn(uint8_t note, uint8_t velocity = 127) {
   midiEventPacket_t noteOn = {0x09, 0x90, note, velocity}; // Note On, channel 1
   MidiUSB.sendMIDI(noteOn);
   MidiUSB.flush();
 }
 
-// Function to send MIDI Note Off
 void sendMidiNoteOff(uint8_t note, uint8_t velocity = 0) {
   midiEventPacket_t noteOff = {0x08, 0x80, note, velocity}; // Note Off, channel 1
   MidiUSB.sendMIDI(noteOff);
   MidiUSB.flush();
 }
 
-// Function to send all chord notes as Note On
 void sendChordNotes() {
   // Send Note On for each chord note
   for (int i = 0; i < chordSizes[0]; i++) {
     String noteStr = chord[i];
     // Convert note string to MIDI note number
-    // Assuming base octave (C4 = 60)
+    // Assuming octave 4 (Middle C = 60)
     int baseNote = 60; // C4
     int semitoneOffset = 0;
     for (int j = 0; j < 12; j++) {
@@ -208,12 +196,8 @@ void sendChordNotes() {
       }
     }
     int midiNote = baseNote + semitoneOffset;
-    // Apply octave shift
+    // Apply octave shift if necessary
     midiNote += octaveShift * 12;
-
-    // Ensure MIDI note is within valid range
-    if (midiNote < 0) midiNote = 0;
-    if (midiNote > 127) midiNote = 127;
 
     // Store active notes
     midiNotes[i].note = midiNote;
@@ -225,7 +209,6 @@ void sendChordNotes() {
   }
 }
 
-// Function to send all chord notes as Note Off
 void sendChordNotesOff() {
   // Send Note Off for each active chord note
   for (int i = 0; i < chordSizes[0]; i++) {
@@ -338,7 +321,7 @@ void setup() {
   pinMode(SR_CLOCK_PIN, OUTPUT);
   pinMode(SR_DATA_PIN, OUTPUT);
 
-  // Initialize LED states to off
+  // Clear shift registers
   byte initialStates[4] = { 0 };
   writeShiftRegister(initialStates);
 }
@@ -351,8 +334,8 @@ void loop() {
   generateScale(currentTonic, scale, currentScaleType);
 
   for (int i = 0; i < NUM_BUTTONS; i++) {
-    int muxIndex = (i < 16) ? 0 : 1;       // 0 for MUX1 (buttons 0-15), 1 for MUX2 (buttons 16-30)
-    int muxButtonIndex = (i < 16) ? i : i - 16;
+    int muxIndex = i / 16;       // 0 for MUX1, 1 for MUX2
+    int muxButtonIndex = i % 16;
 
     bool isPressed = readMuxButton(muxIndex, muxButtonIndex);
 
@@ -400,10 +383,7 @@ void loop() {
           }
           int prevMidiNote = baseNote + semitoneOffset;
           prevMidiNote += octaveShift * 12;
-          // Ensure MIDI note is within valid range
-          if (prevMidiNote >= 0 && prevMidiNote <= 127) {
-            sendMidiNoteOff(prevMidiNote);
-          }
+          sendMidiNoteOff(prevMidiNote);
         }
 
         // Toggle current note
@@ -422,10 +402,7 @@ void loop() {
           }
           int currentMidiNote = baseNote + semitoneOffset;
           currentMidiNote += octaveShift * 12;
-          // Ensure MIDI note is within valid range
-          if (currentMidiNote >= 0 && currentMidiNote <= 127) {
-            sendMidiNoteOff(currentMidiNote);
-          }
+          sendMidiNoteOff(currentMidiNote);
         }
         else {
           buttonStates[i] = true;
@@ -446,100 +423,58 @@ void loop() {
           }
           int midiNote = baseNote + semitoneOffset;
           midiNote += octaveShift * 12;
-          // Ensure MIDI note is within valid range
-          if (midiNote >= 0 && midiNote <= 127) {
-            sendMidiNoteOn(midiNote);
-          }
+          sendMidiNoteOn(midiNote);
         }
       }
     }
-    else if (i == OCTAVE_UP_BUTTON || i == OCTAVE_DOWN_BUTTON) {
-      // Octave Shift Buttons (19-20)
+    if (i >= 19 && i <= 19 + numScales - 1) {
+      // Scale Buttons: Toggle behavior with exclusive activation
       if (isPressed && !prevButtonStates[i]) {
-        if (i == OCTAVE_UP_BUTTON) {
-          if (octaveShift < MAX_OCTAVE_SHIFT) {
-            octaveShift++;
-            Serial.print("Octave Shift increased to: ");
-            Serial.println(octaveShift);
-            // Update LEDs for octave shift buttons
-            buttonStates[OCTAVE_UP_BUTTON] = (octaveShift > 0);
-            buttonStates[OCTAVE_DOWN_BUTTON] = (octaveShift < 0);
-            // Update shift register states
-          }
-        }
-        else if (i == OCTAVE_DOWN_BUTTON) {
-          if (octaveShift > MIN_OCTAVE_SHIFT) {
-            octaveShift--;
-            Serial.print("Octave Shift decreased to: ");
-            Serial.println(octaveShift);
-            // Update LEDs for octave shift buttons
-            buttonStates[OCTAVE_UP_BUTTON] = (octaveShift > 0);
-            buttonStates[OCTAVE_DOWN_BUTTON] = (octaveShift < 0);
-          }
+        Serial.print("Scale Button ");
+        Serial.print(scales[i - 19].name);
+        Serial.println(" pressed");
+
+        // Deactivate previously active scale
+        if (activeScaleIndex != -1 && activeScaleIndex != i) {
+          buttonStates[activeScaleIndex] = false;
+          // Optionally handle MIDI messages related to scale change
         }
 
-        // After shifting octaves, update active notes
-        if (activeNoteIndex != -1) {
-          // Send Note Off for the previous note
-          String prevNoteStr = chromaticScale[activeNoteIndex - 7];
-          int baseNote = 60; // C4
-          int semitoneOffset = 0;
-          for (int j = 0; j < 12; j++) {
-            if (String(chromaticScale[j]) == prevNoteStr) {
-              semitoneOffset = j;
-              break;
-            }
-          }
-          int prevMidiNote = baseNote + semitoneOffset;
-          prevMidiNote += (octaveShift - ((i == OCTAVE_UP_BUTTON) ? 1 : -1)) * 12;
-          // Ensure MIDI note is within valid range
-          if (prevMidiNote >= 0 && prevMidiNote <= 127) {
-            sendMidiNoteOff(prevMidiNote);
-          }
-
-          // Send Note On for the new note with updated octave
-          int newMidiNote = baseNote + semitoneOffset;
-          newMidiNote += octaveShift * 12;
-          // Ensure MIDI note is within valid range
-          if (newMidiNote >= 0 && newMidiNote <= 127) {
-            sendMidiNoteOn(newMidiNote);
-          }
-        }
-      }
-    }
-    else if (i >=21 && i <=30) {
-      // Scale Buttons (21-30): Toggle behavior with exclusive activation
-      if (isPressed && !prevButtonStates[i]) {
-        int scaleIndex = i - 21;
-        if (scaleIndex < numScales) {
-          Serial.print("Scale Button ");
-          Serial.print(scales[scaleIndex].name);
-          Serial.println(" pressed");
-
-          // Deactivate previously active scale
-          if (activeScaleIndex != -1 && activeScaleIndex != i) {
-            buttonStates[activeScaleIndex] = false;
-          }
-
-          // Toggle current scale
-          if (activeScaleIndex == i) {
-            buttonStates[i] = false;
-            activeScaleIndex = -1;
-            currentScaleType = "Major"; // Default to Major if no scale is active
-            Serial.println("Scale type reset to Major");
-          } else {
-            buttonStates[i] = true;
-            activeScaleIndex = i;
-            currentScaleType = scales[scaleIndex].name;
-            Serial.print("Scale type set to ");
-            Serial.println(currentScaleType);
-          }
+        // Toggle current scale
+        if (activeScaleIndex == i) {
+          buttonStates[i] = false;
+          activeScaleIndex = -1;
+        } else {
+          buttonStates[i] = true;
+          activeScaleIndex = i;
+          currentScaleType = scales[i - 19].name;
+          Serial.print("Scale type set to ");
+          Serial.println(currentScaleType);
         }
       }
     }
     else {
-      // Other buttons: Handle if any (buttons 21-30 are handled above)
-      // Currently, no action for buttons beyond 30
+      // Other buttons: Toggle behavior or specific actions (Buttons 19-30 are handled above)
+      if (isPressed && !prevButtonStates[i]) {
+        Serial.print("Button ");
+        Serial.print(i);
+        Serial.println(" pressed");
+
+        // Currently, only handle Major Scale (Button 19)
+        if (i == 19){
+          // Set scale to Major
+          currentScaleType = "Major";
+          Serial.println("Scale type set to Major");
+          // Ensure only this scale button is active
+          if (activeScaleIndex != -1 && activeScaleIndex != i) {
+            buttonStates[activeScaleIndex] = false;
+          }
+          activeScaleIndex = i;
+          buttonStates[i] = true;
+        }
+
+        // Add more button functionalities as needed
+      }
     }
 
     prevButtonStates[i] = isPressed;
@@ -573,4 +508,14 @@ bool buildChord(String scale[7], int numeralIndex) {
   }
 
   return true;
+}
+
+// Function to handle sending MIDI Note Off for all active notes (optional)
+void sendAllNotesOff() {
+  for (int i = 0; i < 3; i++) {
+    if (midiNotes[i].active) {
+      sendMidiNoteOff(midiNotes[i].note);
+      midiNotes[i].active = false;
+    }
+  }
 }
