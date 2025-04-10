@@ -531,6 +531,8 @@ void sendMidiNote() {
     ledCurrentState[ledIndex] = false;    // Start with LED off
     regWrite(ledIndex, LOW);              // Turn LED off immediately
   }
+  delay(45);
+  // Wait 45 miliseconds before turning off the note
 
   // Send MIDI Note Off
   midiEventPacket_t noteOff = {0x08, 0x80, note, 0};
