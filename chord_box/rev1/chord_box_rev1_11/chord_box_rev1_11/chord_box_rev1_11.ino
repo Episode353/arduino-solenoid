@@ -537,6 +537,6 @@ void loop() {
   
   // Map potentiometer value to a delay time (0-150ms)
   // When pot is at 0, strumDelay = 0 (no delay, all notes play together)
-  // When pot is at max, strumDelay = 100ms (significant strum effect)
-  strumDelay = map(potValue, 0, 1023, 0, 100);
+  // When pot is at max, strumDelay = 400ms (significant strum effect)
+  strumDelay = map(potValue, 0, 1023, 0, 400);
 }
