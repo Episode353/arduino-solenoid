@@ -1,4 +1,3 @@
-
 #include <MIDIUSB.h>
 #include <EEPROM.h>
 
@@ -63,6 +62,11 @@ bool octave_shift_State = false;  // false = OFF (no octave shifting), true = ON
 bool arp_state = false;           // false = OFF (no arpeggio), true = ON (arpeggio)
 bool randomizer_state = false;    // false = OFF, true = ON (random note)
 
+// New variables for arpeggiator octave range
+int arpOctaveRange = 0;           // How many octaves up the arpeggiator will go
+int currentArpOctave = 0;         // Current octave in the arpeggiator cycle
+int currentOctavePass = 0;        // Tracks which pass through the octave we're on
+
 #define FIRST_PRESET_BUTTON 20
 #define LAST_PRESET_BUTTON 31
 #define EEPROM_PRESET_BASE_ADDRESS 0 // Base address in EEPROM for presets
@@ -85,6 +89,36 @@ const unsigned long MUX_READ_INTERVAL = 10;     // Check buttons every 10ms
 const unsigned long LED_UPDATE_INTERVAL = 5;    // Update LEDs every 5ms
 const unsigned long ENCODER_CHECK_INTERVAL = 1; // Check encoder more frequently
 
+
+// Inertia mode variables
+const float maxInertia = 0.55;  // Adjust this value to change the maximum inertia
+bool inertia_mode = false;           // false = OFF, true = ON
+float knobInertia = 0.0;             // Current inertia value
+const float inertiaDecayRate = 0.001; // Rate at which inertia decays decay per update
+const float minInertiaThreshold = 0.0001; // Minimum inertia to continue movement
+unsigned long lastInertiaUpdateTime = 0;
+const unsigned long INERTIA_UPDATE_INTERVAL = 15; // Update inertia effect every 20ms
+const float inertiaPerDetent = 0.0075; // Adjust this value to change how much inertia is added per click
+
+struct NoteOffEvent {
+  bool active;           // Whether this event is active and waiting to be processed
+  unsigned long dueTime; // When to process this event (in milliseconds)
+  uint8_t noteNumber;    // Which MIDI note to turn off
+};
+
+
+// Queue for pending note-off events (adjust size based on expected polyphony)
+#define MAX_NOTE_EVENTS 10
+NoteOffEvent noteOffQueue[MAX_NOTE_EVENTS];
+
+// Initialize the noteOffQueue in setup()
+void initializeNoteOffQueue() {
+  for (int i = 0; i < MAX_NOTE_EVENTS; i++) {
+    noteOffQueue[i].active = false;
+  }
+}
+
+
 // Function toggle handler
 void toggleFunction(int buttonIndex, bool isPressed) {
   // Toggle function for Octave Shift (button 14)
@@ -103,6 +137,10 @@ void toggleFunction(int buttonIndex, bool isPressed) {
     Serial.println(arp_state ? "ON" : "OFF");
     buttonStates[buttonIndex] = arp_state; // Sync button state
     regWrite(buttonIndex, arp_state ? HIGH : LOW); // Update LED
+    
+    // Reset arpeggiator variables when toggling
+    currentArpOctave = 0;
+    currentOctavePass = 0;
   }
 
   // Toggle function for Randomizer (button 16)
@@ -113,6 +151,18 @@ void toggleFunction(int buttonIndex, bool isPressed) {
     buttonStates[buttonIndex] = randomizer_state; // Sync button state
     regWrite(buttonIndex, randomizer_state ? HIGH : LOW); // Update LED
   }
+
+  if (buttonIndex == 17 && isPressed) { // Detect press event only
+  inertia_mode = !inertia_mode; // Toggle state
+  Serial.print("Function 4 (Inertia Mode) ");
+  Serial.println(inertia_mode ? "ON" : "OFF");
+  buttonStates[buttonIndex] = inertia_mode; // Sync button state
+  regWrite(buttonIndex, inertia_mode ? HIGH : LOW); // Update LED
+  
+  // Reset inertia when toggling the mode
+  knobInertia = 0.0;
+}
+
 
   // Handle preset buttons (20–31)
   if (buttonIndex >= FIRST_PRESET_BUTTON && buttonIndex <= LAST_PRESET_BUTTON) {
@@ -192,6 +242,9 @@ void handleOctaveButtonFlash(int buttonIndex) {
 void readMuxButtons() {
   const int octaveShiftMin = -5; // Minimum octave shift
   const int octaveShiftMax = 4;  // Maximum octave shift
+  
+  // Set maximum octave range for arpeggiator
+  const int maxArpOctaveRange = 4;  // Maximum octave range for arpeggiator
 
   // Process buttons 0–15 from the first multiplexer
   for (int i = 0; i < 16; i++) {
@@ -204,19 +257,35 @@ void readMuxButtons() {
     int buttonState = digitalRead(muxSigPin);
     bool isPressed = (buttonState == LOW);
 
-    // Handle momentary octave shift for buttons 12 and 13
+    // Handle octave buttons with modified behavior for arpeggiator mode
     if (i == 12 || i == 13) {
       if (isPressed && !prevButtonStates[i]) { // Detect press event only
-        if (i == 12 && octaveShift < octaveShiftMax) {
-          octaveShift++; // Increment octave shift
-          Serial.print("Octave Shift: ");
-          Serial.println(octaveShift);
-          handleOctaveButtonFlash(12);
-        } else if (i == 13 && octaveShift > octaveShiftMin) {
-          octaveShift--; // Decrement octave shift
-          Serial.print("Octave Shift: ");
-          Serial.println(octaveShift);
-          handleOctaveButtonFlash(13);
+        if (arp_state) {
+          // In arpeggiator mode, buttons change octave range
+          if (i == 12 && arpOctaveRange < maxArpOctaveRange) {
+            arpOctaveRange++; // Increase number of octaves to loop through
+            Serial.print("Arp Octave Range: ");
+            Serial.println(arpOctaveRange);
+            handleOctaveButtonFlash(12);
+          } else if (i == 13 && arpOctaveRange > 0) {
+            arpOctaveRange--; // Decrease number of octaves to loop through
+            Serial.print("Arp Octave Range: ");
+            Serial.println(arpOctaveRange);
+            handleOctaveButtonFlash(13);
+          }
+        } else {
+          // Regular octave shifting in non-arp mode
+          if (i == 12 && octaveShift < octaveShiftMax) {
+            octaveShift++; // Increment octave shift
+            Serial.print("Octave Shift: ");
+            Serial.println(octaveShift);
+            handleOctaveButtonFlash(12);
+          } else if (i == 13 && octaveShift > octaveShiftMin) {
+            octaveShift--; // Decrement octave shift
+            Serial.print("Octave Shift: ");
+            Serial.println(octaveShift);
+            handleOctaveButtonFlash(13);
+          }
         }
       }
     }
@@ -339,7 +408,7 @@ void readEncoder() {
   }
 }
 
-// Handle encoder position change
+// Modify your processEncoder function to handle inertia mode
 void processEncoder() {
   // Only process if there's been a change
   if (encoderPos != lastEncoderPos) {
@@ -365,6 +434,17 @@ void processEncoder() {
         if (bpm > max_bpm) bpm = max_bpm;
         Serial.print("BPM: ");
         Serial.println(bpm);
+      } else if (inertia_mode) {
+        // In inertia mode, turning adds to the inertia value
+        knobInertia += detents * inertiaPerDetent;
+        
+
+        // Cap maximum inertia at a reasonable value to prevent excessive speeds
+        knobInertia = constrain(knobInertia, -maxInertia, maxInertia);
+        
+        
+        Serial.print("Inertia: ");
+        Serial.println(knobInertia);
       } else {
         // Handle note selection in normal mode
         if (activeNotesCount > 0) {
@@ -387,6 +467,63 @@ void processEncoder() {
               }
               currentNoteIndex = activeNotesCount - 1;
             }
+          }
+          
+          // Send the MIDI note
+          sendMidiNote();
+        }
+      }
+    }
+  }
+}
+
+// Modify the processInertia function to handle decay differently based on sign
+void processInertia() {
+  unsigned long currentTime = millis();
+  
+  // Only update at specified interval
+  if (currentTime - lastInertiaUpdateTime >= INERTIA_UPDATE_INTERVAL) {
+    lastInertiaUpdateTime = currentTime;
+    
+    // Only process if inertia mode is active and there's significant inertia
+    if (inertia_mode && abs(knobInertia) > minInertiaThreshold) {
+      // Apply decay only to positive inertia values
+      if (knobInertia > 0) {
+        // Apply decay to the inertia value
+        knobInertia -= inertiaDecayRate;
+        
+        // If inertia is below threshold after decay, stop movement
+        if (knobInertia <= minInertiaThreshold) {
+          knobInertia = 0.0;
+          return;
+        }
+      }
+      // For negative values, we keep them (no decay)
+      // This allows the user to set negative inertia that stays consistent
+      
+      // Calculate how many notes to move based on inertia
+      // We accumulate the fractional movement until it's enough to move a note
+      static float accumulatedMovement = 0.0;
+      accumulatedMovement += knobInertia;
+      
+      // When accumulated movement is >= 1.0 or <= -1.0, move notes
+      if (abs(accumulatedMovement) >= 1.0) {
+        int notesToMove = (int)accumulatedMovement; // Get whole number of notes to move
+        accumulatedMovement -= notesToMove; // Keep the remainder
+        
+        if (activeNotesCount > 0) {
+          // Update note index based on inertia direction
+          currentNoteIndex += notesToMove;
+          
+          // Handle wrapping
+          while (currentNoteIndex >= activeNotesCount) {
+            currentNoteIndex -= activeNotesCount;
+            if (octave_shift_State) octaveShift++;
+          }
+          
+          while (currentNoteIndex < 0) {
+            currentNoteIndex += activeNotesCount;
+            if (octave_shift_State) octaveShift--;
           }
           
           // Send the MIDI note
@@ -502,6 +639,7 @@ void updateLEDs() {
   }
 }
 
+// Replace your sendMidiNote() function with this one:
 void sendMidiNote() {
   if (activeNotesCount == 0) return;
   
@@ -510,8 +648,12 @@ void sendMidiNote() {
   
   int note = activeNotes[currentNoteIndex];
 
-  // Apply octave shift
-  note += octaveShift * 12;
+  // Apply octave shift (base octave + current arpeggiator octave if in arp mode)
+  if (arp_state) {
+    note += (octaveShift + currentArpOctave) * 12;
+  } else {
+    note += octaveShift * 12;
+  }
   
   // Calculate LED index for the note and check if it's within valid range
   int ledIndex = note % 12;
@@ -524,6 +666,9 @@ void sendMidiNote() {
   MidiUSB.sendMIDI(noteOn);
   MidiUSB.flush();
 
+  // Schedule Note Off to happen 45ms from now
+  queueNoteOff(note, 45); // 45ms delay
+
   // Flash the LED off briefly if it's not already flashing
   if (!ledFlashing[ledIndex]) {
     ledFlashTimers[ledIndex] = millis();  // Set flash start time
@@ -532,29 +677,90 @@ void sendMidiNote() {
     ledCurrentState[ledIndex] = false;    // Start with LED off
     regWrite(ledIndex, LOW);              // Turn LED off immediately
   }
-  delay(45);
-  // Wait 45 miliseconds before turning off the note
+}
 
-  // Send MIDI Note Off
-  midiEventPacket_t noteOff = {0x08, 0x80, note, 0};
+// New function to queue a note-off event
+void queueNoteOff(uint8_t noteNumber, unsigned long delayMs) {
+  // Find an empty slot in the queue
+  for (int i = 0; i < MAX_NOTE_EVENTS; i++) {
+    if (!noteOffQueue[i].active) {
+      // Found an empty slot, schedule the note-off
+      noteOffQueue[i].active = true;
+      noteOffQueue[i].dueTime = millis() + delayMs;
+      noteOffQueue[i].noteNumber = noteNumber;
+      return;
+    }
+  }
+  // If we get here, the queue is full, so we'll handle it immediately
+  // (this should be rare if MAX_NOTE_EVENTS is sized appropriately)
+  midiEventPacket_t noteOff = {0x08, 0x80, noteNumber, 0};
   MidiUSB.sendMIDI(noteOff);
   MidiUSB.flush();
 }
 
-// Cycle notes at the set BPM
+
+// Add this function to process any pending note-off events
+void processNoteOffQueue() {
+  unsigned long currentTime = millis();
+  
+  for (int i = 0; i < MAX_NOTE_EVENTS; i++) {
+    if (noteOffQueue[i].active && currentTime >= noteOffQueue[i].dueTime) {
+      // Time to process this note-off event
+      midiEventPacket_t noteOff = {0x08, 0x80, noteOffQueue[i].noteNumber, 0};
+      MidiUSB.sendMIDI(noteOff);
+      MidiUSB.flush();
+      
+      // Mark the slot as available
+      noteOffQueue[i].active = false;
+    }
+  }
+}
+
+// Cycle notes at the set BPM with octave range feature
 void cycleNotes() {
   cycleInterval = 60000 / bpm;
 
   if (millis() - lastNoteChangeTime >= cycleInterval) {
     if (activeNotesCount > 0) {
+      // Track note progression for octave changing, regardless of randomization
+      static int noteCounter = 0;
+      noteCounter++;
+      
       if (randomizer_state) {
         // Function 3: Select a random note from active notes
-        int randomIndex = random(0, activeNotesCount);  // Get a random index
-        currentNoteIndex = randomIndex;  // Use that index
+        currentNoteIndex = random(0, activeNotesCount);  // Get a random index
       } else {
-        // Function 2 (arpeggio) or normal mode
-        currentNoteIndex = (currentNoteIndex + 1) % activeNotesCount;
+        // Function 2 (arpeggio) mode without randomization
+        currentNoteIndex++;
+        // When we reach the end of the note sequence, wrap around
+        if (currentNoteIndex >= activeNotesCount) {
+          currentNoteIndex = 0;
+        }
       }
+      
+      // Check if we've played through all notes in the current sequence
+      // This happens regardless of whether we're in random mode or not
+      if (noteCounter >= activeNotesCount) {
+        noteCounter = 0; // Reset note counter
+        
+        // Move to next octave/pass
+        currentOctavePass++;
+        
+        // Calculate which octave we're on based on the pass count
+        if (arpOctaveRange == 0) {
+          // If range is 0, just stay in the base octave
+          currentArpOctave = 0;
+        } else {
+          // Otherwise, calculate current octave (0 to arpOctaveRange, then back to 0)
+          currentArpOctave = currentOctavePass % (arpOctaveRange + 1);
+          
+          // If we've completed a full cycle through all octaves, reset the pass counter
+          if (currentOctavePass > arpOctaveRange) {
+            currentOctavePass = 0;
+          }
+        }
+      }
+      
       sendMidiNote();  // Send the current note
     }
     lastNoteChangeTime = millis();
@@ -571,6 +777,11 @@ void loop() {
   if (currentTime - lastEncoderTime >= ENCODER_CHECK_INTERVAL) {
     processEncoder();
     lastEncoderTime = currentTime;
+  }
+
+  // Process inertia if the mode is active
+  if (inertia_mode) {
+    processInertia();
   }
   
   // Read buttons at a reasonable rate
@@ -590,4 +801,7 @@ void loop() {
   if (arp_state) {
     cycleNotes();
   }
+  
+  // Process any pending MIDI note-off events
+  processNoteOffQueue();
 }

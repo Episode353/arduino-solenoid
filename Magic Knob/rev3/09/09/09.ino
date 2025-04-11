@@ -1,4 +1,3 @@
-
 #include <MIDIUSB.h>
 #include <EEPROM.h>
 
@@ -63,6 +62,11 @@ bool octave_shift_State = false;  // false = OFF (no octave shifting), true = ON
 bool arp_state = false;           // false = OFF (no arpeggio), true = ON (arpeggio)
 bool randomizer_state = false;    // false = OFF, true = ON (random note)
 
+// New variables for arpeggiator octave range
+int arpOctaveRange = 0;           // How many octaves up the arpeggiator will go
+int currentArpOctave = 0;         // Current octave in the arpeggiator cycle
+int currentOctavePass = 0;        // Tracks which pass through the octave we're on
+
 #define FIRST_PRESET_BUTTON 20
 #define LAST_PRESET_BUTTON 31
 #define EEPROM_PRESET_BASE_ADDRESS 0 // Base address in EEPROM for presets
@@ -103,6 +107,10 @@ void toggleFunction(int buttonIndex, bool isPressed) {
     Serial.println(arp_state ? "ON" : "OFF");
     buttonStates[buttonIndex] = arp_state; // Sync button state
     regWrite(buttonIndex, arp_state ? HIGH : LOW); // Update LED
+    
+    // Reset arpeggiator variables when toggling
+    currentArpOctave = 0;
+    currentOctavePass = 0;
   }
 
   // Toggle function for Randomizer (button 16)
@@ -192,6 +200,9 @@ void handleOctaveButtonFlash(int buttonIndex) {
 void readMuxButtons() {
   const int octaveShiftMin = -5; // Minimum octave shift
   const int octaveShiftMax = 4;  // Maximum octave shift
+  
+  // Set maximum octave range for arpeggiator
+  const int maxArpOctaveRange = 4;  // Maximum octave range for arpeggiator
 
   // Process buttons 0–15 from the first multiplexer
   for (int i = 0; i < 16; i++) {
@@ -204,19 +215,35 @@ void readMuxButtons() {
     int buttonState = digitalRead(muxSigPin);
     bool isPressed = (buttonState == LOW);
 
-    // Handle momentary octave shift for buttons 12 and 13
+    // Handle octave buttons with modified behavior for arpeggiator mode
     if (i == 12 || i == 13) {
       if (isPressed && !prevButtonStates[i]) { // Detect press event only
-        if (i == 12 && octaveShift < octaveShiftMax) {
-          octaveShift++; // Increment octave shift
-          Serial.print("Octave Shift: ");
-          Serial.println(octaveShift);
-          handleOctaveButtonFlash(12);
-        } else if (i == 13 && octaveShift > octaveShiftMin) {
-          octaveShift--; // Decrement octave shift
-          Serial.print("Octave Shift: ");
-          Serial.println(octaveShift);
-          handleOctaveButtonFlash(13);
+        if (arp_state) {
+          // In arpeggiator mode, buttons change octave range
+          if (i == 12 && arpOctaveRange < maxArpOctaveRange) {
+            arpOctaveRange++; // Increase number of octaves to loop through
+            Serial.print("Arp Octave Range: ");
+            Serial.println(arpOctaveRange);
+            handleOctaveButtonFlash(12);
+          } else if (i == 13 && arpOctaveRange > 0) {
+            arpOctaveRange--; // Decrease number of octaves to loop through
+            Serial.print("Arp Octave Range: ");
+            Serial.println(arpOctaveRange);
+            handleOctaveButtonFlash(13);
+          }
+        } else {
+          // Regular octave shifting in non-arp mode
+          if (i == 12 && octaveShift < octaveShiftMax) {
+            octaveShift++; // Increment octave shift
+            Serial.print("Octave Shift: ");
+            Serial.println(octaveShift);
+            handleOctaveButtonFlash(12);
+          } else if (i == 13 && octaveShift > octaveShiftMin) {
+            octaveShift--; // Decrement octave shift
+            Serial.print("Octave Shift: ");
+            Serial.println(octaveShift);
+            handleOctaveButtonFlash(13);
+          }
         }
       }
     }
@@ -510,8 +537,12 @@ void sendMidiNote() {
   
   int note = activeNotes[currentNoteIndex];
 
-  // Apply octave shift
-  note += octaveShift * 12;
+  // Apply octave shift (base octave + current arpeggiator octave if in arp mode)
+  if (arp_state) {
+    note += (octaveShift + currentArpOctave) * 12;
+  } else {
+    note += octaveShift * 12;
+  }
   
   // Calculate LED index for the note and check if it's within valid range
   int ledIndex = note % 12;
@@ -541,20 +572,51 @@ void sendMidiNote() {
   MidiUSB.flush();
 }
 
-// Cycle notes at the set BPM
+// Cycle notes at the set BPM with octave range feature
 void cycleNotes() {
   cycleInterval = 60000 / bpm;
 
   if (millis() - lastNoteChangeTime >= cycleInterval) {
     if (activeNotesCount > 0) {
+      // Track note progression for octave changing, regardless of randomization
+      static int noteCounter = 0;
+      noteCounter++;
+      
       if (randomizer_state) {
         // Function 3: Select a random note from active notes
-        int randomIndex = random(0, activeNotesCount);  // Get a random index
-        currentNoteIndex = randomIndex;  // Use that index
+        currentNoteIndex = random(0, activeNotesCount);  // Get a random index
       } else {
-        // Function 2 (arpeggio) or normal mode
-        currentNoteIndex = (currentNoteIndex + 1) % activeNotesCount;
+        // Function 2 (arpeggio) mode without randomization
+        currentNoteIndex++;
+        // When we reach the end of the note sequence, wrap around
+        if (currentNoteIndex >= activeNotesCount) {
+          currentNoteIndex = 0;
+        }
       }
+      
+      // Check if we've played through all notes in the current sequence
+      // This happens regardless of whether we're in random mode or not
+      if (noteCounter >= activeNotesCount) {
+        noteCounter = 0; // Reset note counter
+        
+        // Move to next octave/pass
+        currentOctavePass++;
+        
+        // Calculate which octave we're on based on the pass count
+        if (arpOctaveRange == 0) {
+          // If range is 0, just stay in the base octave
+          currentArpOctave = 0;
+        } else {
+          // Otherwise, calculate current octave (0 to arpOctaveRange, then back to 0)
+          currentArpOctave = currentOctavePass % (arpOctaveRange + 1);
+          
+          // If we've completed a full cycle through all octaves, reset the pass counter
+          if (currentOctavePass > arpOctaveRange) {
+            currentOctavePass = 0;
+          }
+        }
+      }
+      
       sendMidiNote();  // Send the current note
     }
     lastNoteChangeTime = millis();
